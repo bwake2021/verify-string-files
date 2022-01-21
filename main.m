@@ -144,34 +144,159 @@ NSDictionary *otherStringsFiles(NSString *masterPath) {
 	}
 }
 
+NSArray *checkKey(NSString *masterKey, NSDictionary *othersByLanguage) {
+
+    NSMutableArray *missingLanguages = [NSMutableArray new];
+
+    for (NSString *language in othersByLanguage) {
+
+        NSDictionary *otherStrings = othersByLanguage[language];
+        if (otherStrings[masterKey] == nil) {
+            [missingLanguages addObject:language];
+        }
+    }
+
+    return missingLanguages;
+}
+
 NSDictionary *checkForMissingKeys(NSDictionary *master, NSDictionary *othersByLanguage) {
 
-	/** Arrays of langauges missing by langauge key */
+    /** Arrays of languages missing by language key */
+    NSMutableDictionary *problems = [NSMutableDictionary new];
+
+    for (NSString *masterKey in master) {
+
+        NSArray *missingLanguages = checkKey(masterKey, othersByLanguage);
+
+        if (missingLanguages.count > 0) {
+            problems[masterKey] = missingLanguages;
+        }
+
+    }
+
+    if (problems.count > 0) {
+        return [NSDictionary dictionaryWithDictionary: problems];
+    } else {
+        return nil;
+    }
+}
+
+/// Rough-and-ready format count character count
+int countFormats(NSString *string) {
+
+    int count = 0;
+    unsigned long len = string.length;
+    for (int i = 0; i < len; ++i) {
+
+        unichar c = [string characterAtIndex:i];
+        if ('@' == c || '%' == c) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+NSArray *checkFormat(NSString *masterKey, NSString *masterFormat, NSDictionary *othersByLanguage) {
+
+    NSMutableArray *formatMismatch = [NSMutableArray new];
+
+    int masterCount = countFormats(masterFormat);
+    for (NSString *language in othersByLanguage) {
+
+        NSDictionary *otherStrings = othersByLanguage[language];
+        NSString *otherString = otherStrings[masterKey];
+        if (otherString != nil && countFormats(otherString) != masterCount) {
+            [formatMismatch addObject:language];
+        }
+    }
+
+    return formatMismatch;
+}
+
+NSDictionary *checkForFormatMismatch(NSDictionary *master, NSDictionary *othersByLanguage) {
+
+	/** Arrays of languages with mismatched format character counts */
 	NSMutableDictionary *problems = [NSMutableDictionary new];
 
 	for	(NSString *masterKey in master) {
 
-		NSMutableArray *missingLanguages = [NSMutableArray new];
+        NSArray *formatMismatch = checkFormat(masterKey, master[masterKey], othersByLanguage);
 
-		for (NSString *language in othersByLanguage) {
-
-			NSDictionary *otherStrings = othersByLanguage[language];
-			if (otherStrings[masterKey] == nil) {
-				[missingLanguages addObject:language];
-			}
+		if (formatMismatch.count > 0) {
+			problems[masterKey] = formatMismatch;
 		}
-
-		if (missingLanguages.count > 0) {
-			problems[masterKey] = missingLanguages;
-		}
-
 	}
 
 	if (problems.count > 0) {
-		return [NSDictionary dictionaryWithDictionary:problems];
+		return [NSDictionary dictionaryWithDictionary: problems];
 	} else {
 		return nil;
 	}
+}
+
+NSArray *checkTranslation(NSString *masterKey, NSString *masterString, NSDictionary *othersByLanguage) {
+
+    NSMutableArray *stringMatches = [NSMutableArray new];
+
+    for (NSString *language in othersByLanguage) {
+
+        NSDictionary *otherStrings = othersByLanguage[language];
+        NSString *otherString = otherStrings[masterKey];
+        if (otherString != nil && NSOrderedSame == [otherString caseInsensitiveCompare: masterString]) {
+            [stringMatches addObject:language];
+        }
+    }
+
+    return stringMatches;
+}
+
+
+NSDictionary *checkForTranslation(NSDictionary *master, NSDictionary *othersByLanguage) {
+
+    /** Arrays of languages with mismatched format character counts */
+    NSMutableDictionary *problems = [NSMutableDictionary new];
+
+    for (NSString *masterKey in master) {
+
+        NSArray *stringMatches = checkTranslation(masterKey, master[masterKey], othersByLanguage);
+
+        if (stringMatches.count > 0) {
+            problems[masterKey] = stringMatches;
+        }
+    }
+
+    if (problems.count > 0) {
+        return [NSDictionary dictionaryWithDictionary: problems];
+    } else {
+        return nil;
+    }
+}
+
+NSDictionary *dictionaryOfKeyLines(NSString *stringsFilePath) {
+
+    NSMutableDictionary *keyLines = [NSMutableDictionary new];
+
+    NSString *fileContents = [[NSString alloc] initWithContentsOfFile:stringsFilePath usedEncoding:nil error:nil];
+
+    if (fileContents.length == 0) {
+        return nil;
+    }
+
+    NSArray *lines = [fileContents componentsSeparatedByString:@"\n"];
+
+    for (NSUInteger lineIndex = 0; lineIndex < lines.count; lineIndex++) {
+        NSString *keyString = [lines[lineIndex] componentsSeparatedByString: @"="][0];
+        keyString = [keyString stringByTrimmingCharactersInSet: NSCharacterSet.whitespaceCharacterSet];
+        NSUInteger keyStringLen = keyString.length;
+        if (2 < keyStringLen && '\"' == [keyString characterAtIndex: 0] && '\"' == [keyString characterAtIndex: keyStringLen - 1]) {
+
+            keyString = [keyString substringWithRange: NSMakeRange(1, keyString.length - 2)];
+
+            keyLines[keyString] = [NSNumber numberWithUnsignedLong: lineIndex + 1];
+        }
+    }
+
+    return keyLines;
 }
 
 #pragma mark - Output
@@ -184,23 +309,18 @@ NSUInteger lineNumberForKeyInStringsFile(NSString *key, NSString *stringsFilePat
 		stringsFileCache = [NSMutableDictionary new];
 	}
 
-	NSString *fileContents = stringsFileCache[stringsFilePath];
-	if (fileContents == nil) {
-		fileContents = [[NSString alloc] initWithContentsOfFile:stringsFilePath usedEncoding:nil error:nil];
-		stringsFileCache[stringsFilePath] = fileContents;
-	}
+    NSDictionary *keyLines = stringsFileCache[stringsFilePath];
+    if (nil == keyLines) {
+        keyLines = dictionaryOfKeyLines(stringsFilePath);
+    }
 
-	if (fileContents.length == 0) {
-		return 1;
-	}
+    if (nil != keyLines) {
+        NSNumber *lineForKey = [keyLines objectForKey: key];
+        if (Nil != lineForKey) {
 
-	NSArray *lines = [fileContents componentsSeparatedByString:@"\n"];
-	for (NSUInteger lineIndex = 0; lineIndex < lines.count; lineIndex++) {
-		NSString *line = lines[lineIndex];
-		if ([line rangeOfString:key].location != NSNotFound) {
-			return lineIndex + 1;
-		}
-	}
+            return lineForKey.unsignedLongValue;
+        }
+    }
 
 	return 1;
 }
@@ -223,6 +343,42 @@ void logMissingKeys(NSString *masterStringsFilePath, NSDictionary *missingKeys, 
 	}
 }
 
+void logFormatMismatch(NSString *masterStringsFilePath, NSDictionary *mismatchedFormats, NSString *warningLevel) {
+
+    for (NSString *masterKey in mismatchedFormats) {
+
+        NSUInteger keyLine = lineNumberForKeyInStringsFile(masterKey, masterStringsFilePath);
+        NSArray *missingLanguages = mismatchedFormats[masterKey];
+
+        for (NSString *language in missingLanguages) {
+            fprintf(stderr, "%s:%lu: %s: %s does not match format specifiers in %s\n",
+                    masterStringsFilePath.UTF8String,
+                    (unsigned long)keyLine,
+                    warningLevel.UTF8String,
+                    masterKey.UTF8String,
+                    language.UTF8String);
+        }
+    }
+}
+
+void logPossibleMissingTranslation(NSString *masterStringsFilePath, NSDictionary *mismatchedFormats, NSString *warningLevel) {
+
+    for (NSString *masterKey in mismatchedFormats) {
+
+        NSUInteger keyLine = lineNumberForKeyInStringsFile(masterKey, masterStringsFilePath);
+        NSArray *missingLanguages = mismatchedFormats[masterKey];
+
+        for (NSString *language in missingLanguages) {
+            fprintf(stderr, "%s:%lu: %s: %s possible missing translation in %s\n",
+                    masterStringsFilePath.UTF8String,
+                    (unsigned long)keyLine,
+                    warningLevel.UTF8String,
+                    masterKey.UTF8String,
+                    language.UTF8String);
+        }
+    }
+}
+
 #pragma mark - Main
 
 BOOL warningLevelIsValid(NSString *warningLevel) {
@@ -241,6 +397,7 @@ int main(int argc, const char * argv[])
 		if (warningLevel.length == 0) {
 			warningLevel = @"error";
 		}
+        NSString *newWarningLevel = @"warning";
 
         setbuf(stdout, NULL);
 
@@ -260,8 +417,13 @@ int main(int argc, const char * argv[])
 		NSDictionary *missingKeys = checkForMissingKeys(masterStrings, otherStrings);
 		logMissingKeys(inputFilePath, missingKeys, warningLevel);
 
-        exit(EXIT_SUCCESS);
+        NSDictionary *formatMismatches = checkForFormatMismatch(masterStrings, otherStrings);
+        logFormatMismatch(inputFilePath, formatMismatches, newWarningLevel);
 
+        NSDictionary *stringMatches = checkForTranslation(masterStrings, otherStrings);
+        logPossibleMissingTranslation(inputFilePath, stringMatches, newWarningLevel);
+
+        exit(EXIT_SUCCESS);
     }
     return 0;
 }
